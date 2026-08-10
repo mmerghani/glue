@@ -4,7 +4,12 @@
 
 It is built for people who want the workflow quality of Claude Code, but do not want to depend on Anthropic cloud billing for every session.
 
-![Glue Desktop](glue-source/public/screenshots/desktop-main.png)
+![Glue Desktop](docs/assets/glue-ui-new-session.png)
+
+## Download the App
+
+- [Download Glue Desktop for macOS (Apple Silicon)](https://github.com/mmerghani/glue/releases/download/v1.37.0/glue-desktop-1.37.0-mac-arm64.dmg)
+- [View all releases](https://github.com/mmerghani/glue/releases)
 
 ## The Problem
 
@@ -55,13 +60,13 @@ This makes the project easier to maintain while still solving a real usability p
 
 ## Screenshots
 
-### Desktop
+### New Session
 
-![Glue Desktop Main](glue-source/public/screenshots/desktop-main.png)
+![Glue New Session](docs/assets/glue-ui-new-session.png)
 
-### CLI Model Selection
+### Login
 
-![Glue CLI Model Selection](glue-source/public/screenshots/cli-selection.png)
+![Glue Login](docs/assets/glue-login.png)
 
 ## Quick Start
 
@@ -185,3 +190,12 @@ If you wanted:
 - fewer moving pieces to wire by hand
 
 that is exactly the problem Glue is solving.
+
+## Thank You
+
+Glue stands on the work of open-source projects that made this possible:
+
+- [`claude-code-local`](https://github.com/nicedreamzapp/claude-code-local) for proving the local Claude Code runtime path
+- [CloudCLI / ClaudeCodeUI](https://github.com/siteboon/claudecodeui) for the desktop and web UI base that Glue rebrands and integrates
+- `vllm-mlx` and the local Apple Silicon inference ecosystem that make practical on-device serving possible
+- The [Hugging Face](https://huggingface.co/) community and model publishers who distribute the local models this workflow depends on
