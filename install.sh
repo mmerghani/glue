@@ -50,6 +50,12 @@ What it does:
   3. Clones or updates ~/claude-code-local and runs its upstream install.sh
   4. Copies launchers/glue into ~/.glue/glue and links it into your PATH
   5. Optionally runs npm install in glue-source/ for local desktop work
+
+Important:
+  Glue installs the local runtime during setup, but the first model download
+  still happens on first use. When you run glue cli or glue ui for the first
+  time, claude-code-local may download the selected model from Hugging Face.
+  This can take several minutes depending on your internet speed and model size.
 HELP
 }
 
@@ -186,6 +192,10 @@ print_summary() {
   printf '  glue status\n'
   printf '  glue cli\n'
   printf '  glue ui\n'
+  printf '\nImportant:\n'
+  printf '  The local runtime is installed now, but the AI model may still need\n'
+  printf '  to download from Hugging Face the first time you run glue cli or\n'
+  printf '  glue ui. That first launch can take several minutes.\n'
 
   if [[ -f "$GLUE_SOURCE_DIR/package.json" && "$INSTALLED_DESKTOP_DEPS" != "1" ]]; then
     printf '\nFor desktop development or local packaging:\n'

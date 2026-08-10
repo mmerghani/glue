@@ -11,6 +11,16 @@ It is built for people who want the workflow quality of Claude Code, but do not 
 - [Download Glue Desktop for macOS (Apple Silicon)](https://github.com/mmerghani/glue/releases/download/v1.37.0/glue-desktop-1.37.0-mac-arm64.dmg)
 - [View all releases](https://github.com/mmerghani/glue/releases)
 
+## Before You Start
+
+Glue installs the local runtime during setup, but the AI model itself may still
+need to download from Hugging Face the first time you use Glue.
+
+- This first download is normal
+- It happens when you first run `glue cli` or `glue ui`
+- It can take several minutes depending on your internet speed and the model you choose
+- During that first run, Glue is preparing the local model on your machine
+
 ## The Problem
 
 Today, there are two strong pieces in the open-source ecosystem, but they do not become a smooth product on their own:
@@ -95,6 +105,9 @@ The installer will:
 - run upstream `claude-code-local/install.sh`
 - install the maintained Glue launcher into `~/.glue/glue`
 - link `glue` into your PATH
+
+After install, the first run of `glue cli` or `glue ui` may still need to
+download the selected model from Hugging Face. That is expected on a new machine.
 
 ## Daily Use
 
