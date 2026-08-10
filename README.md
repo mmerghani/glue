@@ -1,8 +1,27 @@
 # Glue
 
-**Glue is a local-first Claude Code experience with both CLI and desktop UI, powered by your own local models.**
+<div align="center">
+  <p><strong>Run Claude Code locally with your own models.</strong></p>
+  <p>Glue is the local-first Claude Code experience with desktop and web UI on Apple Silicon.</p>
+  <p>
+    <img alt="No API Key" src="https://img.shields.io/badge/No_API_Key-Local_only-2ea043?style=for-the-badge" />
+    <img alt="Local Models" src="https://img.shields.io/badge/Local_Models-On_device-2ea043?style=for-the-badge" />
+    <img alt="Desktop UI" src="https://img.shields.io/badge/Desktop_UI-Included-0969da?style=for-the-badge" />
+    <img alt="Web UI" src="https://img.shields.io/badge/Web_UI-Included-0969da?style=for-the-badge" />
+    <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple_Silicon-Optimized-f85149?style=for-the-badge" />
+    <img alt="Real tool use" src="https://img.shields.io/badge/Real_tool_use-End_to_end-8250df?style=for-the-badge" />
+  </p>
+  <p>
+    <a href="https://github.com/mmerghani/glue/releases/download/v1.37.0/glue-desktop-1.37.0-mac-arm64.dmg">
+      <img alt="Download Glue Desktop" src="https://img.shields.io/badge/Download_macOS-Glue_Desktop-0969da?style=for-the-badge" />
+    </a>
+    <a href="https://github.com/mmerghani/glue/releases">
+      <img alt="View Releases" src="https://img.shields.io/badge/View-Releases-6f42c1?style=for-the-badge" />
+    </a>
+  </p>
+</div>
 
-It is built for people who want the workflow quality of Claude Code, but do not want to depend on Anthropic cloud billing for every session.
+> First run downloads the selected local model once. The default starter model is about 5GB, and larger models take longer.
 
 ![Glue Desktop](docs/assets/glue-ui-new-session.png)
 
