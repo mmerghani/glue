@@ -133,106 +133,11 @@ jobs:
           path: glue-source/server-release-assets/*
           if-no-files-found: error
 
-  build-windows:
-    name: Build Windows desktop app
-    needs: resolve-release
-    runs-on: windows-latest
-    permissions:
-      contents: read
-    defaults:
-      run:
-        working-directory: glue-source
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: glue-source/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Configure release server bundle source
-        shell: bash
-        env:
-          SERVER_BUNDLE_TAG: ${{ needs.resolve-release.outputs.server_bundle_tag }}
-        run: printf '{"releaseTag":"%s"}\n' "$SERVER_BUNDLE_TAG" > electron/server-bundle-config.json
-
-      - name: Check Windows signing secrets
-        id: windows-signing
-        shell: bash
-        env:
-          WINDOWS_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          WINDOWS_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-        run: |
-          if [ -n "$WINDOWS_CSC_LINK" ] && [ -n "$WINDOWS_CSC_KEY_PASSWORD" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build signed Windows artifacts
-        if: steps.windows-signing.outputs.enabled == 'true'
-        run: npm run desktop:dist:win -- --publish never
-        env:
-          CLOUDCLI_SEMANTICS_BUILD_REQUIRED: "1"
-          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
-
-      - name: Build unsigned Windows artifacts
-        if: steps.windows-signing.outputs.enabled != 'true'
-        run: npm run desktop:dist:win -- --publish never
-        env:
-          CLOUDCLI_SEMANTICS_BUILD_REQUIRED: "1"
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
-
-      - name: Build Windows local server bundle
-        run: node scripts/release/build-server-bundle.js
-
-      - name: Stage Windows release assets
-        shell: bash
-        run: |
-          mkdir -p desktop-release-assets server-release-assets
-          test -n "$(find release/desktop -maxdepth 1 -name '*.exe' -print -quit)"
-          sha256sum release/desktop/*.exe > desktop-release-assets/SHASUMS256-windows.txt
-          cp release/desktop/*.exe desktop-release-assets/
-
-          test -n "$(find release/local-server -maxdepth 1 -name 'cloudcli-local-server-*.tar.gz' -print -quit)"
-          test -n "$(find release/local-server -maxdepth 1 -name 'cloudcli-local-server-*.tar.gz.sha256' -print -quit)"
-          cp release/local-server/* server-release-assets/
-
-      - name: Upload Windows desktop assets
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: desktop-release-windows
-          path: glue-source/desktop-release-assets/*
-          if-no-files-found: error
-
-      - name: Upload Windows server assets
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: server-release-windows
-          path: glue-source/server-release-assets/*
-          if-no-files-found: error
-
   publish:
     name: Publish desktop release
     needs:
       - resolve-release
       - build-macos
-      - build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -254,9 +159,7 @@ jobs:
       - name: Verify release assets
         run: |
           test -n "$(find release/desktop -maxdepth 1 -name '*.dmg' -print -quit)"
-          test -n "$(find release/desktop -maxdepth 1 -name '*.exe' -print -quit)"
           test -f release/desktop/SHASUMS256-macos.txt
-          test -f release/desktop/SHASUMS256-windows.txt
           test -n "$(find release/local-server -maxdepth 1 -name 'cloudcli-local-server-*.tar.gz' -print -quit)"
           test -n "$(find release/local-server -maxdepth 1 -name 'cloudcli-local-server-*.tar.gz.sha256' -print -quit)"
           find release -maxdepth 2 -type f -print | sort
