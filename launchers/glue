@@ -1,0 +1,315 @@
+#!/bin/bash
+# Glue - The Local AI Coding Assistant
+
+GLUE_HOME="$HOME/.glue"
+CLAUDE_CODE_LOCAL_DIR="$HOME/claude-code-local"
+HF_CACHE="$HOME/.cache/huggingface/hub"
+
+# ─── DETECT AVAILABLE MODELS ───
+# Only the models cclocal/run.sh is designed to serve (its MODEL_IDS catalog),
+# NOT everything in the HuggingFace cache — TTS / whisper / multimodal models
+# in the cache can't be served by vllm-mlx and crash on load. The catalog is
+# parsed from run.sh so glue stays in sync with cclocal's source of truth.
+detect_models() {
+    while IFS= read -r id; do
+        [[ -n "$id" ]] || continue
+        short_name="${id#*/}"
+        echo "$id|$short_name"
+    done < <(sed -n '/^MODEL_IDS=(/,/^)/p' "$CLAUDE_CODE_LOCAL_DIR/run.sh" \
+        | sed -nE 's/^[[:space:]]*"(mlx-community\/[^"]+)",?$/\1/p')
+}
+
+# ─── MODEL SELECTION ───
+select_model() {
+    local models=()
+    local display_names=()
+    
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            local full_id=$(echo "$line" | cut -d'|' -f1)
+            local short_name=$(echo "$line" | cut -d'|' -f2)
+            models+=("$full_id")
+            display_names+=("$short_name")
+        fi
+    done < <(detect_models)
+    
+    local n=${#models[@]}
+    
+    if [[ $n -eq 0 ]]; then
+        echo "mlx-community/gemma-4-e4b-it-4bit"
+        return 0
+    fi
+    
+    if [[ $n -eq 1 ]]; then
+        echo "${models[0]}"
+        return 0
+    fi
+    
+    # Print menu to stderr so it doesn't get captured
+    echo "" >&2
+    echo "Select a model:   ● downloaded   ○ not downloaded" >&2
+    echo "" >&2
+    for ((i=0; i<n; i++)); do
+        local cache_dir="$HF_CACHE/models--${models[$i]//\//--}"
+        if [[ -d "$cache_dir" ]]; then
+            local size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+            printf "  ● %d) %-48s %s\n" $((i+1)) "${display_names[$i]}" "$size" >&2
+        else
+            printf "  ○ %d) %-48s %s\n" $((i+1)) "${display_names[$i]}" "not downloaded" >&2
+        fi
+    done
+    echo "" >&2
+    echo "  0) Cancel" >&2
+    echo "" >&2
+    
+    local choice
+    while true; do
+        read -p "  Choose model [1-$n]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -le $n ]]; then
+            # Return the full model ID via stdout
+            echo "${models[$((choice-1))]}"
+            return 0
+        elif [[ "$choice" == "0" ]]; then
+            echo "CANCELLED"
+            return 1
+        else
+            echo "Invalid choice." >&2
+        fi
+    done
+}
+
+# ─── GLUE CLI ───
+# Delegates the whole session to cclocal/run.sh:
+#   - starts the server (health wait, memory preflight, cleanup on exit)
+#   - launches Claude Code with the full native-harness config that `cclocal`
+#     uses (ANTHROPIC_DEFAULT_*_MODEL, CLAUDE_CODE_SUBAGENT_MODEL,
+#     --allowedTools, --tools, --strict-mcp-config, DISABLE_* env, ...), so
+#     the harness works exactly like a real `cclocal` session.
+#   - run.sh never cd's, so Claude Code opens in the folder where glue was
+#     launched — works from any directory (e.g. /Users/morgan/fansbs).
+glue_cli() {
+    local model=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                model="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    # Get the model
+    if [[ -n "$model" ]]; then
+        echo "📡 Using specified model: $model"
+    else
+        echo "🧩 Glue - The Local AI Coding Assistant"
+        echo ""
+        # Capture the model name from select_model's stdout (menu goes to stderr)
+        model=$(select_model)
+        if [[ "$model" == "CANCELLED" ]] || [[ -z "$model" ]]; then
+            return 1
+        fi
+    fi
+    
+    echo ""
+    echo "📡 Launching with model: $model"
+    echo "📂 Working in: $(pwd)"
+    
+    # Keep the glue-specific bash timeout; run.sh handles everything else.
+    export CLAUDE_CODE_BASH_TIMEOUT=600000
+    "$CLAUDE_CODE_LOCAL_DIR/run.sh" --model "$model"
+}
+
+# ─── GLUE UI ───
+# Launches the CloudCLI web UI (claudecodeui) pointed at the local vllm-mlx
+# server. Exports the same env run.sh uses for Claude Code
+# (ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_MODEL /
+# ANTHROPIC_DEFAULT_*_MODEL / CLAUDE_CODE_SUBAGENT_MODEL / DISABLE_* ...):
+# CloudCLI forwards its host env to the Claude Agent SDK subprocess it spawns,
+# so the chat runs against the local model — no API key required.
+# Reuses an already-healthy server on :8000; otherwise starts one via run.sh
+# and stops it when the UI exits.
+glue_ui() {
+    local model=""
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                model="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    
+    # Get the model
+    if [[ -n "$model" ]]; then
+        echo "📡 Using specified model: $model"
+    else
+        echo "🧩 Glue - The Local AI Coding Assistant"
+        echo ""
+        # Capture the model name from select_model's stdout (menu goes to stderr)
+        model=$(select_model)
+        if [[ "$model" == "CANCELLED" ]] || [[ -z "$model" ]]; then
+            return 1
+        fi
+    fi
+    
+    echo ""
+    echo "📡 Local model: $model"
+    echo "📂 Working in: $(pwd)"
+    
+    # ── Server: reuse a healthy one on :8000, else start via run.sh ──
+    local started_server=0
+    local server_pid=""
+    if curl -s -m 2 http://127.0.0.1:8000/health > /dev/null 2>&1; then
+        echo "✅ Local server already running on :8000 — reusing it"
+    else
+        echo "⏳ Starting local server..."
+        ( cd "$CLAUDE_CODE_LOCAL_DIR" && ./run.sh --server --model "$model" --port 8000 ) > /tmp/glue-server.log 2>&1 &
+        server_pid=$!
+        started_server=1
+        
+        local max_wait=180 wait_time=0
+        while ! curl -s -m 2 http://127.0.0.1:8000/health > /dev/null 2>&1; do
+            sleep 2
+            wait_time=$((wait_time + 2))
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+                echo "❌ Server process died. Check /tmp/glue-server.log"
+                tail -15 /tmp/glue-server.log
+                return 1
+            fi
+            if [[ $wait_time -ge $max_wait ]]; then
+                echo "❌ Timed out waiting for server. Check /tmp/glue-server.log"
+                tail -15 /tmp/glue-server.log
+                return 1
+            fi
+        done
+        echo "✅ Server ready"
+    fi
+    
+    # ── Export the same env run.sh uses for Claude Code ──
+    # (CloudCLI inherits these and passes them to the Claude SDK subprocess)
+    export CLAUDE_CODE_BASH_TIMEOUT=600000
+    export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
+    export ANTHROPIC_API_KEY="not-needed"
+    export ANTHROPIC_MODEL="$model"
+    export ANTHROPIC_DEFAULT_OPUS_MODEL="$model"
+    export ANTHROPIC_DEFAULT_SONNET_MODEL="$model"
+    export ANTHROPIC_DEFAULT_HAIKU_MODEL="$model"
+    export CLAUDE_CODE_SUBAGENT_MODEL="$model"
+    export CLAUDE_CODE_MAX_OUTPUT_TOKENS=16384
+    export CLAUDE_CODE_ATTRIBUTION_HEADER=0
+    export DISABLE_AUTOUPDATER=1
+    export DISABLE_TELEMETRY=1
+    export DISABLE_ERROR_REPORTING=1
+    export DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+    
+    echo ""
+    echo "🌐 Launching Glue UI (CloudCLI)…"
+    echo "   Open http://localhost:3001 in your browser."
+    echo "   Chat in the UI drives Claude Code against the local model."
+    echo "   Press Ctrl+C here to stop the UI and the local server."
+    echo ""
+    
+    # Unset any real key from the parent shell so it can't leak through.
+    env -u ANTHROPIC_AUTH_TOKEN npx -y @cloudcli-ai/cloudcli
+    
+    # Cleanup: stop the server only if we started it
+    if [[ $started_server -eq 1 && -n "$server_pid" ]]; then
+        echo ""
+        echo "🛑 Stopping local server..."
+        kill "$server_pid" 2>/dev/null
+        wait "$server_pid" 2>/dev/null
+    fi
+}
+
+glue_status() {
+    echo "📊 Glue Status"
+    if lsof -ti :8000 > /dev/null 2>&1; then
+        echo "✅ Server: Running on port 8000"
+    else
+        echo "❌ Server: Not running"
+    fi
+    if command -v claude &> /dev/null; then
+        echo "✅ Claude Code: Installed"
+    else
+        echo "❌ Claude Code: Not found"
+    fi
+    if [[ -d "$CLAUDE_CODE_LOCAL_DIR" ]]; then
+        echo "✅ vllm-mlx: Installed"
+    else
+        echo "❌ vllm-mlx: Not found"
+    fi
+    echo ""
+    echo "📦 Supported Models:"
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            local short_name=$(echo "$line" | cut -d'|' -f2)
+            local full_id="${line%%|*}"
+            local cache_dir="$HF_CACHE/models--${full_id//\//--}"
+            if [[ -d "$cache_dir" ]]; then
+                local size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+                echo "  ● $short_name ($size)"
+            else
+                echo "  ○ $short_name (not downloaded)"
+            fi
+        fi
+    done < <(detect_models)
+}
+
+glue_models() {
+    echo "📦 Supported Models:"
+    echo ""
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then
+            local short_name=$(echo "$line" | cut -d'|' -f2)
+            local full_id="${line%%|*}"
+            local cache_dir="$HF_CACHE/models--${full_id//\//--}"
+            if [[ -d "$cache_dir" ]]; then
+                local size=$(du -sh "$cache_dir" 2>/dev/null | cut -f1)
+                echo "  ● $short_name ($size)"
+            else
+                echo "  ○ $short_name (not downloaded)"
+            fi
+        fi
+    done < <(detect_models)
+}
+
+glue_help() {
+    cat << 'EOF'
+🧩 Glue - The Local AI Coding Assistant
+
+Usage: glue {cli|ui|status|models|help}
+
+Commands:
+  cli      Launch Claude Code with model selection
+  ui       Launch Glue Web UI
+  status   Show server and model status
+  models   List available models
+  help     Show this help
+
+Examples:
+  glue cli                     # Claude Code terminal session (interactive model pick)
+  glue cli --model MODEL       # Use a specific model
+  glue ui                      # CloudCLI web UI (chat GUI) against the local model
+  glue ui --model MODEL        # UI with a specific model
+  glue status                  # Check status
+  glue models                  # List models
+EOF
+}
+
+case "$1" in
+    cli) shift; glue_cli "$@" ;;
+    ui) shift; glue_ui "$@" ;;
+    status) glue_status ;;
+    models) glue_models ;;
+    help|--help|-h) glue_help ;;
+    *) glue_help ;;
+esac
