@@ -5,6 +5,50 @@ GLUE_HOME="$HOME/.glue"
 CLAUDE_CODE_LOCAL_DIR="$HOME/claude-code-local"
 HF_CACHE="$HOME/.cache/huggingface/hub"
 
+server_pids_on_port() {
+    lsof -ti :8000 2>/dev/null | awk 'NF' | sort -u
+}
+
+first_server_pid() {
+    server_pids_on_port | head -n 1
+}
+
+server_command_for_pid() {
+    local pid="$1"
+    [[ -n "$pid" ]] || return 1
+    ps -p "$pid" -o command= 2>/dev/null
+}
+
+extract_model_from_command() {
+    local command="$1"
+
+    if [[ "$command" =~ --model[[:space:]]+([^[:space:]]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    if [[ "$command" =~ serve[[:space:]]+([^[:space:]]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return 0
+    fi
+
+    return 1
+}
+
+active_server_model() {
+    local pid command model
+    pid="$(first_server_pid)"
+    [[ -n "$pid" ]] || return 1
+
+    command="$(server_command_for_pid "$pid")"
+    [[ -n "$command" ]] || return 1
+
+    model="$(extract_model_from_command "$command" || true)"
+    [[ -n "$model" ]] || return 1
+
+    echo "$model"
+}
+
 # ─── DETECT AVAILABLE MODELS ───
 # Only the models cclocal/run.sh is designed to serve (its MODEL_IDS catalog),
 # NOT everything in the HuggingFace cache — TTS / whisper / multimodal models
@@ -232,8 +276,15 @@ glue_ui() {
 
 glue_status() {
     echo "📊 Glue Status"
-    if lsof -ti :8000 > /dev/null 2>&1; then
+    if server_pids_on_port > /dev/null; then
         echo "✅ Server: Running on port 8000"
+        local active_model=""
+        active_model="$(active_server_model || true)"
+        if [[ -n "$active_model" ]]; then
+            echo "   Active model: ${active_model#*/}"
+        else
+            echo "   Active model: unknown"
+        fi
     else
         echo "❌ Server: Not running"
     fi
@@ -264,6 +315,61 @@ glue_status() {
     done < <(detect_models)
 }
 
+glue_stop() {
+    local pids=()
+    local active_model=""
+    local remaining=()
+
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && pids+=("$pid")
+    done < <(server_pids_on_port)
+
+    if [[ ${#pids[@]} -eq 0 ]]; then
+        echo "ℹ️ Local server is not running on port 8000"
+        return 0
+    fi
+
+    active_model="$(active_server_model || true)"
+    if [[ -n "$active_model" ]]; then
+        echo "🛑 Stopping local server on port 8000 (${active_model#*/})..."
+    else
+        echo "🛑 Stopping local server on port 8000..."
+    fi
+
+    env kill "${pids[@]}" 2>/dev/null || true
+
+    local attempts=0
+    while [[ $attempts -lt 5 ]]; do
+        sleep 1
+        remaining=()
+        while IFS= read -r pid; do
+            [[ -n "$pid" ]] && remaining+=("$pid")
+        done < <(server_pids_on_port)
+        if [[ ${#remaining[@]} -eq 0 ]]; then
+            echo "✅ Local server stopped"
+            return 0
+        fi
+        attempts=$((attempts + 1))
+    done
+
+    echo "⚠️ Server still running after waiting; forcing stop..."
+    env kill -9 "${remaining[@]}" 2>/dev/null || true
+    sleep 1
+
+    remaining=()
+    while IFS= read -r pid; do
+        [[ -n "$pid" ]] && remaining+=("$pid")
+    done < <(server_pids_on_port)
+
+    if [[ ${#remaining[@]} -eq 0 ]]; then
+        echo "✅ Local server stopped"
+        return 0
+    fi
+
+    echo "❌ Could not stop the local server on port 8000"
+    return 1
+}
+
 glue_models() {
     echo "📦 Supported Models:"
     echo ""
@@ -286,12 +392,13 @@ glue_help() {
     cat << 'EOF'
 🧩 Glue - The Local AI Coding Assistant
 
-Usage: glue {cli|ui|status|models|help}
+Usage: glue {cli|ui|status|stop|models|help}
 
 Commands:
   cli      Launch Claude Code with model selection
   ui       Launch Glue Web UI
   status   Show server and model status
+  stop     Stop the local server on port 8000
   models   List available models
   help     Show this help
 
@@ -301,6 +408,7 @@ Examples:
   glue ui                      # CloudCLI web UI (chat GUI) against the local model
   glue ui --model MODEL        # UI with a specific model
   glue status                  # Check status
+  glue stop                    # Stop the local server
   glue models                  # List models
 EOF
 }
@@ -309,6 +417,7 @@ case "$1" in
     cli) shift; glue_cli "$@" ;;
     ui) shift; glue_ui "$@" ;;
     status) glue_status ;;
+    stop) glue_stop ;;
     models) glue_models ;;
     help|--help|-h) glue_help ;;
     *) glue_help ;;
