@@ -25,6 +25,9 @@ sleep 1
   node electron/scripts/generate-macos-icon.js
 )
 
+grep -Fq -- "generate-logo-assets.js" "$GLUE_SOURCE_DIR/package.json"
+grep -Fq -- "glue logo white.png" "$GLUE_SOURCE_DIR/public/generate-logo-assets.js"
+
 test -s "$ICON_PNG"
 test -s "$ICON_ICNS"
 
