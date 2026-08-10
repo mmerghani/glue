@@ -53,9 +53,10 @@ What it does:
 
 Important:
   Glue installs the local runtime during setup, but the first model download
-  still happens on first use. When you run glue cli or glue ui for the first
-  time, claude-code-local may download the selected model from Hugging Face.
-  This can take several minutes depending on your internet speed and model size.
+  still happens on first use. The first time you run glue cli or glue ui,
+  claude-code-local may download the model you selected from Hugging Face.
+  The default starter model is about 5GB. Larger models take longer.
+  This download only happens once per model.
 HELP
 }
 
@@ -195,7 +196,8 @@ print_summary() {
   printf '\nImportant:\n'
   printf '  The local runtime is installed now, but the AI model may still need\n'
   printf '  to download from Hugging Face the first time you run glue cli or\n'
-  printf '  glue ui. That first launch can take several minutes.\n'
+  printf '  glue ui. The default starter model is about 5GB, larger models\n'
+  printf '  take longer, and each model only downloads once.\n'
 
   if [[ -f "$GLUE_SOURCE_DIR/package.json" && "$INSTALLED_DESKTOP_DEPS" != "1" ]]; then
     printf '\nFor desktop development or local packaging:\n'

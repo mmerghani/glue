@@ -18,7 +18,8 @@ need to download from Hugging Face the first time you use Glue.
 
 - This first download is normal
 - It happens when you first run `glue cli` or `glue ui`
-- It can take several minutes depending on your internet speed and the model you choose
+- The default starter model is about `5GB`; larger models take longer
+- Each model only downloads once on a machine
 - During that first run, Glue is preparing the local model on your machine
 
 ## The Problem
@@ -87,6 +88,8 @@ git clone https://github.com/mmerghani/glue.git ~/glue
 cd ~/glue
 ./install.sh
 ```
+
+> First run downloads the selected local model once. The default starter model is about 5GB, and larger models take longer.
 
 ### Or download the source ZIP
 
