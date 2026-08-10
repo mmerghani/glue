@@ -275,8 +275,10 @@ glue_ui() {
 }
 
 glue_status() {
+    local pid=""
     echo "📊 Glue Status"
-    if server_pids_on_port > /dev/null; then
+    pid="$(first_server_pid)"
+    if [[ -n "$pid" ]]; then
         echo "✅ Server: Running on port 8000"
         local active_model=""
         active_model="$(active_server_model || true)"
