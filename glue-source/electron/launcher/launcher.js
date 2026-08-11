@@ -1,3 +1,5 @@
+import { buildLocalModelMarkup, getSelectedLocalModelView } from './localModelMarkup.js';
+
 window.__APP_VERSION__ = '1.34.0';
 window.__MOCK_STATE__ = {
   account: { connected: true, email: 'you@cloudcli.ai' },
@@ -162,14 +164,8 @@ window.__MOCK_STATE__ = {
     return (state && (state.shareableWebUrl || state.localWebUrl)) || '';
   }
 
-  function availableLocalModels(state) {
-    return (state && state.availableLocalModels) || [];
-  }
-
   function selectedLocalModel(state) {
-    var settings = state && state.desktopSettings ? state.desktopSettings : {};
-    var models = availableLocalModels(state);
-    return settings.selectedLocalModel || (models[0] && models[0].id) || 'mlx-community/gemma-4-e4b-it-4bit';
+    return getSelectedLocalModelView(state).selectedId || 'mlx-community/gemma-4-e4b-it-4bit';
   }
 
   function envCount(state) {
@@ -195,7 +191,7 @@ window.__MOCK_STATE__ = {
     connected: connected,
     authState: authState,
     accountLabel: accountLabel,
-    availableLocalModels: availableLocalModels,
+    availableLocalModels: function (state) { return getSelectedLocalModelView(state).models; },
     localUrl: localUrl,
     selectedLocalModel: selectedLocalModel,
     envCount: envCount,
@@ -264,7 +260,7 @@ window.__MOCK_STATE__ = {
   };
 
   CC.getSelectedLocalModel = function () {
-    var field = document.querySelector('[data-cc-setting="selectedLocalModel"]');
+    var field = document.querySelector('[data-cc-setting="selectedLocalModel"]:checked');
     if (field && field.value) {
       return field.value;
     }
@@ -476,13 +472,8 @@ window.__MOCK_STATE__ = {
     options = options || {};
     var settings = state.desktopSettings || {};
     var url = localUrl(state) || 'starts on demand';
-    var models = availableLocalModels(state);
-    var activeModel = selectedLocalModel(state);
-    var modelOptions = models.map(function (option) {
-      return '<option value="' + esc(option.id) + '"' + (option.id === activeModel ? ' selected' : '') + '>' + esc(option.label) + '</option>';
-    }).join('');
     var body = '<div class="cc-surface">' +
-      '<label class="cc-field"><span class="cc-field-label">Local model</span><select class="cc-select" data-cc-setting="selectedLocalModel">' + modelOptions + '</select></label>' +
+      '<div class="cc-field"><span class="cc-field-label">Local model</span>' + buildLocalModelMarkup(state) + '</div>' +
       '<div class="cc-note">Choose a downloaded local model before starting Local Glue.</div>' +
       '<div class="cc-meta mono">' + esc(url) + '</div>' +
       '<div class="cc-row2"><button class="btn sm" data-cc-action="open-web">' + icon('arrow', 14) + 'Open in browser</button><button class="btn sm" data-cc-action="copy-web"' + (state.localServerRunning ? '' : ' disabled') + '>' + icon('copy', 14) + 'Copy URL</button></div>';
@@ -669,14 +660,9 @@ window.__MOCK_STATE__ = {
   }
 
   function localPane(state) {
-    var models = CC.availableLocalModels(state);
-    var activeModel = CC.selectedLocalModel(state);
-    var modelOptions = models.map(function (option) {
-      return '<option value="' + CC.esc(option.id) + '"' + (option.id === activeModel ? ' selected' : '') + '>' + CC.esc(option.label) + '</option>';
-    }).join('');
     return '<div class="pane-h"><div><h2 class="pane-title">Local servers</h2><p class="pane-sub">Manage Local Glue on this machine. No account required.</p></div></div>' +
       '<div class="card"><div class="card-head"><div><div class="card-t">Local server</div><div class="card-sub mono">' + CC.esc(CC.localUrl(state) || 'Starts on demand') + '</div></div><div class="card-tools"><span class="dot" style="background:' + (state.localServerRunning ? 'var(--ok)' : 'var(--tx3)') + '"></span><button class="icon-btn" data-cc-action="local-settings-toggle" title="Local settings">' + CC.icon('gear', 16) + '</button></div></div>' +
-      '<label class="cc-field"><span class="cc-field-label">Local model</span><select class="cc-select" data-cc-setting="selectedLocalModel">' + modelOptions + '</select></label>' +
+      '<div class="cc-field"><span class="cc-field-label">Local model</span>' + buildLocalModelMarkup(state) + '</div>' +
       '<div class="cc-note">Choose a downloaded local model before starting Local Glue.</div>' +
       '<div class="card-actions"><button class="btn pri" data-cc-action="local">' + CC.icon('play', 15) + 'Open Local Glue</button><button class="btn" data-cc-action="open-web">' + CC.icon('arrow', 14) + 'Open in browser</button><button class="btn" data-cc-action="copy-web"' + (state.localServerRunning ? '' : ' disabled') + '>' + CC.icon('copy', 14) + 'Copy URL</button></div></div>';
   }
