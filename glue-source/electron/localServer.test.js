@@ -61,6 +61,7 @@ test('buildLocalModelEnvironment maps one model id to all required Claude env va
   assert.equal(env.CLAUDE_CODE_SUBAGENT_MODEL, 'mlx-community/Qwen3.5-9B-MLX-4bit');
   assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '16384');
   assert.equal(env.DISABLE_TELEMETRY, '1');
+  assert.equal(env.GLUE_LOCAL_MODEL_MODE, '1');
 });
 
 test('renderDotEnvFile emits stable KEY=value lines for the backend runtime', () => {

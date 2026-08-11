@@ -44,6 +44,33 @@ const abortedSessionIds = new Set();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion', 'ExitPlanMode']);
+const GLUE_LOCAL_ALLOWED_TOOLS = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
+const GLUE_LOCAL_ALLOWED_TOOL_PERMISSIONS = [...GLUE_LOCAL_ALLOWED_TOOLS, 'mcp__browser__*'];
+const GLUE_WRITE_IN_PARTS_GUIDANCE = "When creating or substantially editing a file longer than ~150 lines, do NOT emit it in a single Write/Edit tool call. First create the file with an initial section, then append each remaining section with separate, smaller Write/Edit calls. This local model's output is token-capped; an oversized single tool call is truncated and silently dropped.";
+
+function isGlueLocalModelMode(env = process.env) {
+  return String(env.GLUE_LOCAL_MODEL_MODE || '').trim() === '1';
+}
+
+function getGlueClaudeCodeLocalDir(env = process.env, homeDir = os.homedir()) {
+  const configuredDir = String(env.GLUE_CLAUDE_CODE_LOCAL_DIR || '').trim();
+  return configuredDir ? path.resolve(configuredDir) : path.join(homeDir, 'claude-code-local');
+}
+
+async function readJsonFileIfExists(filePath) {
+  try {
+    await fs.access(filePath);
+  } catch {
+    return null;
+  }
+
+  try {
+    return JSON.parse(await fs.readFile(filePath, 'utf8'));
+  } catch (error) {
+    console.error(`Failed to parse ${filePath}:`, error.message);
+    return null;
+  }
+}
 
 function resolveClaudeEffort(model, effort, modelsDefinition = CLAUDE_FALLBACK_MODELS) {
   const selectedModel = modelsDefinition?.OPTIONS?.find((option) => option.value === model) || null;
@@ -162,10 +189,12 @@ function mapCliOptionsToSDK(options = {}) {
   const { providerSessionId, cwd, toolsSettings, permissionMode, effort } = options;
 
   const sdkOptions = {};
+  const runtimeEnv = options.env ? { ...options.env } : { ...process.env };
+  const isGlueLocalMode = isGlueLocalModelMode(runtimeEnv);
 
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
-  sdkOptions.env = { ...process.env };
+  sdkOptions.env = runtimeEnv;
 
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
@@ -191,6 +220,14 @@ function mapCliOptionsToSDK(options = {}) {
 
   let allowedTools = [...(settings.allowedTools || [])];
 
+  if (isGlueLocalMode) {
+    for (const tool of GLUE_LOCAL_ALLOWED_TOOL_PERMISSIONS) {
+      if (!allowedTools.includes(tool)) {
+        allowedTools.push(tool);
+      }
+    }
+  }
+
   if (permissionMode === 'plan') {
     const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
     for (const tool of planModeTools) {
@@ -202,10 +239,11 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.allowedTools = allowedTools;
 
-  // Use the tools preset to make all default built-in tools available (including AskUserQuestion).
-  // This was introduced in SDK 0.1.57. Omitting this preserves existing behavior (all tools available),
-  // but being explicit ensures forward compatibility and clarity.
-  sdkOptions.tools = { type: 'preset', preset: 'claude_code' };
+  // Keep Glue local-model sessions on the same focused tool set as run.sh.
+  // Other Claude sessions keep the default Claude Code preset.
+  sdkOptions.tools = isGlueLocalMode
+    ? [...GLUE_LOCAL_ALLOWED_TOOLS]
+    : { type: 'preset', preset: 'claude_code' };
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
@@ -220,10 +258,16 @@ function mapCliOptionsToSDK(options = {}) {
     sdkOptions.effort = resolvedEffort;
   }
 
-  sdkOptions.systemPrompt = {
-    type: 'preset',
-    preset: 'claude_code'
-  };
+  sdkOptions.systemPrompt = isGlueLocalMode
+    ? {
+        type: 'preset',
+        preset: 'claude_code',
+        append: GLUE_WRITE_IN_PARTS_GUIDANCE,
+      }
+    : {
+        type: 'preset',
+        preset: 'claude_code'
+      };
 
   sdkOptions.settingSources = ['project', 'user', 'local'];
 
@@ -402,55 +446,46 @@ async function buildPromptPayload(command, images, files, cwd) {
  * @param {string} cwd - Current working directory for project-specific configs
  * @returns {Object|null} MCP servers object or null if none found
  */
-async function loadMcpConfig(cwd) {
+async function resolveClaudeMcpConfig(cwd, env = process.env, homeDir = os.homedir()) {
   try {
-    const claudeConfigPath = path.join(os.homedir(), '.claude.json');
-
-    // Check if config file exists
-    try {
-      await fs.access(claudeConfigPath);
-    } catch (error) {
-      // File doesn't exist, return null
-      // No config file
-      return null;
+    if (isGlueLocalModelMode(env)) {
+      const glueLocalConfigPath = path.join(getGlueClaudeCodeLocalDir(env, homeDir), 'mcp-local.json');
+      const glueLocalConfig = await readJsonFileIfExists(glueLocalConfigPath);
+      if (glueLocalConfig?.mcpServers && typeof glueLocalConfig.mcpServers === 'object' && Object.keys(glueLocalConfig.mcpServers).length > 0) {
+        return {
+          mcpServers: { ...glueLocalConfig.mcpServers },
+          strictMcpConfig: true,
+        };
+      }
     }
 
-    // Read and parse config file
-    let claudeConfig;
-    try {
-      const configContent = await fs.readFile(claudeConfigPath, 'utf8');
-      claudeConfig = JSON.parse(configContent);
-    } catch (error) {
-      console.error('Failed to parse ~/.claude.json:', error.message);
-      return null;
+    const claudeConfigPath = path.join(homeDir, '.claude.json');
+    const claudeConfig = await readJsonFileIfExists(claudeConfigPath);
+    if (!claudeConfig || typeof claudeConfig !== 'object') {
+      return { mcpServers: null, strictMcpConfig: false };
     }
 
-    // Extract MCP servers (merge global and project-specific)
     let mcpServers = {};
 
-    // Add global MCP servers
     if (claudeConfig.mcpServers && typeof claudeConfig.mcpServers === 'object') {
       mcpServers = { ...claudeConfig.mcpServers };
-      // Global MCP servers loaded
     }
 
-    // Add/override with project-specific MCP servers
     if (claudeConfig.claudeProjects && cwd) {
       const projectConfig = claudeConfig.claudeProjects[cwd];
       if (projectConfig && projectConfig.mcpServers && typeof projectConfig.mcpServers === 'object') {
         mcpServers = { ...mcpServers, ...projectConfig.mcpServers };
-        // Project MCP servers merged
       }
     }
 
-    // Return null if no servers found
     if (Object.keys(mcpServers).length === 0) {
-      return null;
+      return { mcpServers: null, strictMcpConfig: false };
     }
-    return mcpServers;
+
+    return { mcpServers, strictMcpConfig: false };
   } catch (error) {
     console.error('Error loading MCP config:', error.message);
-    return null;
+    return { mcpServers: null, strictMcpConfig: false };
   }
 }
 
@@ -499,9 +534,12 @@ async function queryClaudeSDK(command, options = {}, ws, context) {
       effortModels,
     });
 
-    const mcpServers = await loadMcpConfig(options.cwd);
-    if (mcpServers) {
-      sdkOptions.mcpServers = mcpServers;
+    const mcpConfig = await resolveClaudeMcpConfig(options.cwd, sdkOptions.env);
+    if (mcpConfig.mcpServers) {
+      sdkOptions.mcpServers = mcpConfig.mcpServers;
+    }
+    if (mcpConfig.strictMcpConfig) {
+      sdkOptions.strictMcpConfig = true;
     }
 
     // Turns with image attachments switch to streaming input so the images
@@ -845,10 +883,14 @@ export const claudeRuntime = {
 
 // Export public API
 export {
+  GLUE_LOCAL_ALLOWED_TOOLS,
+  GLUE_WRITE_IN_PARTS_GUIDANCE,
   queryClaudeSDK,
   abortClaudeSDKSession,
   isClaudeSDKSessionActive,
   getActiveClaudeSDKSessions,
+  mapCliOptionsToSDK,
+  resolveClaudeMcpConfig,
   resolveToolApproval,
   getPendingApprovalsForSession,
   reconnectSessionWriter

@@ -421,6 +421,8 @@ function buildLocalModelEnvironment(modelId, baseUrl = `http://${HOST}:${DEFAULT
     DISABLE_TELEMETRY: '1',
     DISABLE_ERROR_REPORTING: '1',
     DISABLE_NON_ESSENTIAL_MODEL_CALLS: '1',
+    GLUE_LOCAL_MODEL_MODE: '1',
+    GLUE_CLAUDE_CODE_LOCAL_DIR: path.join(os.homedir(), 'claude-code-local'),
   };
 }
 
