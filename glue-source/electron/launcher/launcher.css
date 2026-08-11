@@ -74,6 +74,10 @@ input {
   user-select: text;
 }
 
+select {
+  font: inherit;
+}
+
 button {
   font: inherit;
   color: inherit;
@@ -390,6 +394,33 @@ svg {
   color: var(--tx2);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.cc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cc-field-label {
+  color: var(--tx2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cc-select {
+  width: 100%;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--b);
+  background: var(--s1);
+  color: var(--tx);
+  padding: 0 12px;
+}
+
+.cc-select:focus {
+  outline: 1px solid var(--brand);
+  border-color: var(--brand);
 }
 
 .cc-toggle,

@@ -66,6 +66,118 @@ async function isCloudCliServer(baseUrl) {
     && typeof response.json?.installMode === 'string';
 }
 
+function redirectsToViteDevServer(location) {
+  if (!location) return false;
+  try {
+    const parsed = new URL(String(location));
+    return (parsed.hostname === 'localhost' || parsed.hostname === HOST)
+      && parsed.port === '5173';
+  } catch {
+    return false;
+  }
+}
+
+function hasReusableAppRoot(baseUrl, timeoutMs = HEALTH_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    const req = http.get(baseUrl, { timeout: timeoutMs }, (res) => {
+      const isDevRedirect = res.statusCode >= 300
+        && res.statusCode < 400
+        && redirectsToViteDevServer(res.headers.location);
+      res.resume();
+      resolve(!isDevRedirect);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on('error', () => resolve(false));
+  });
+}
+
+async function isReusableCloudCliServer(baseUrl) {
+  if (!(await isCloudCliServer(baseUrl))) {
+    return false;
+  }
+
+  return hasReusableAppRoot(baseUrl);
+}
+
+function getLocalModelLabel(modelId) {
+  return String(modelId || '').replace(/^mlx-community\//, '');
+}
+
+function getDefaultLocalModelOption() {
+  return {
+    id: DEFAULT_LOCAL_MODEL_ID,
+    label: getLocalModelLabel(DEFAULT_LOCAL_MODEL_ID),
+  };
+}
+
+function getDefaultDesktopSettings() {
+  return {
+    keepLocalServerRunning: false,
+    exposeLocalServerOnNetwork: false,
+    themeMode: 'system',
+    selectedLocalModel: DEFAULT_LOCAL_MODEL_ID,
+  };
+}
+
+function parseConfiguredLocalModelIds(scriptContent) {
+  const match = String(scriptContent || '').match(/MODEL_IDS=\(([\s\S]*?)\n\)/);
+  if (!match) {
+    return [DEFAULT_LOCAL_MODEL_ID];
+  }
+
+  const ids = Array.from(match[1].matchAll(/"(mlx-community\/[^"]+)"/g), ([, modelId]) => modelId);
+  return ids.length ? ids : [DEFAULT_LOCAL_MODEL_ID];
+}
+
+async function getLocalModelOptions(homeDir = os.homedir()) {
+  const runScriptPath = path.join(homeDir, 'claude-code-local', 'run.sh');
+  const hubPath = path.join(homeDir, '.cache', 'huggingface', 'hub');
+
+  let configuredIds = [DEFAULT_LOCAL_MODEL_ID];
+  try {
+    configuredIds = parseConfiguredLocalModelIds(await fs.readFile(runScriptPath, 'utf8'));
+  } catch {
+    configuredIds = [DEFAULT_LOCAL_MODEL_ID];
+  }
+
+  const options = await Promise.all(configuredIds.map(async (modelId) => ({
+    id: modelId,
+    label: getLocalModelLabel(modelId),
+    downloaded: await pathExists(path.join(hubPath, `models--${modelId.replace(/\//g, '--')}`)),
+  })));
+
+  const visibleOptions = options.some((option) => option.downloaded)
+    ? options.filter((option) => option.downloaded)
+    : options;
+  return visibleOptions.map(({ id, label }) => ({ id, label }));
+}
+
+function normalizeSelectedLocalModel(selectedLocalModel, availableLocalModels) {
+  const modelId = String(selectedLocalModel || '').trim();
+  const validIds = new Set((availableLocalModels || []).map((option) => option.id));
+
+  if (modelId && (!validIds.size || validIds.has(modelId))) {
+    return modelId;
+  }
+  if (validIds.size) {
+    return availableLocalModels[0].id;
+  }
+  return DEFAULT_LOCAL_MODEL_ID;
+}
+
+async function isLocalModelBackendServing(baseUrl, modelId) {
+  const response = await requestJson(`${baseUrl}/v1/models`);
+  if (!response.ok || !Array.isArray(response.json?.data)) {
+    return false;
+  }
+
+  return response.json.data.some((entry) => entry?.id === modelId);
+}
+
 function isPortAvailable(port, host = HOST) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -277,12 +389,12 @@ async function waitForHealthyEndpoint(url, timeoutMs) {
   return false;
 }
 
-function resolveLocalModelConfig(env = process.env, homeDir = os.homedir()) {
+function resolveLocalModelConfig(env = process.env, homeDir = os.homedir(), selectedLocalModel = null) {
   const parsedPort = Number.parseInt(String(env.GLUE_DESKTOP_MODEL_PORT || DEFAULT_LOCAL_MODEL_PORT), 10);
   const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65535
     ? parsedPort
     : DEFAULT_LOCAL_MODEL_PORT;
-  const modelId = String(env.GLUE_DESKTOP_MODEL || env.ANTHROPIC_MODEL || DEFAULT_LOCAL_MODEL_ID);
+  const modelId = String(selectedLocalModel || env.GLUE_DESKTOP_MODEL || env.ANTHROPIC_MODEL || DEFAULT_LOCAL_MODEL_ID);
 
   return {
     modelId,
@@ -342,27 +454,33 @@ function mergeDotEnvFile(existingContent, envMap) {
 }
 
 export class LocalServerController {
-  constructor({ appRoot, settingsPath, isPackaged = false, appVersion, onChange }) {
+  constructor({ appRoot, settingsPath, isPackaged = false, appVersion, onChange, homeDir = os.homedir() }) {
     this.appRoot = appRoot;
     this.settingsPath = settingsPath;
     this.isPackaged = isPackaged;
     this.appVersion = appVersion;
     this.onChange = onChange;
+    this.homeDir = homeDir;
     this.localServerUrl = null;
     this.localServerPort = null;
     this.localServerPromise = null;
     this.ownedServerProcess = null;
     this.ownedModelProcess = null;
     this.startupLogs = [];
-    this.desktopSettings = {
-      keepLocalServerRunning: false,
-      exposeLocalServerOnNetwork: false,
-      themeMode: 'system',
-    };
+    this.availableLocalModels = [getDefaultLocalModelOption()];
+    this.desktopSettings = getDefaultDesktopSettings();
   }
 
   getSettings() {
     return this.desktopSettings;
+  }
+
+  getAvailableLocalModels() {
+    return [...this.availableLocalModels];
+  }
+
+  getSelectedLocalModel() {
+    return normalizeSelectedLocalModel(this.desktopSettings.selectedLocalModel, this.availableLocalModels);
   }
 
   getLocalServerUrl() {
@@ -425,6 +543,8 @@ export class LocalServerController {
   }
 
   async loadDesktopSettings() {
+    this.availableLocalModels = await getLocalModelOptions(this.homeDir);
+
     try {
       const raw = await fs.readFile(this.settingsPath, 'utf8');
       const stored = JSON.parse(raw);
@@ -432,21 +552,29 @@ export class LocalServerController {
         keepLocalServerRunning: Boolean(stored.keepLocalServerRunning),
         exposeLocalServerOnNetwork: Boolean(stored.exposeLocalServerOnNetwork),
         themeMode: stored.themeMode === 'light' || stored.themeMode === 'dark' ? stored.themeMode : 'system',
+        selectedLocalModel: normalizeSelectedLocalModel(stored.selectedLocalModel, this.availableLocalModels),
       };
     } catch {
       this.desktopSettings = {
-        keepLocalServerRunning: false,
-        exposeLocalServerOnNetwork: false,
-        themeMode: 'system',
+        ...getDefaultDesktopSettings(),
+        selectedLocalModel: normalizeSelectedLocalModel(DEFAULT_LOCAL_MODEL_ID, this.availableLocalModels),
       };
     }
   }
 
   async saveDesktopSettings(nextSettings = this.desktopSettings) {
+    if (
+      nextSettings.selectedLocalModel
+      && !this.availableLocalModels.some((option) => option.id === nextSettings.selectedLocalModel)
+    ) {
+      this.availableLocalModels = await getLocalModelOptions(this.homeDir);
+    }
+
     this.desktopSettings = {
       keepLocalServerRunning: Boolean(nextSettings.keepLocalServerRunning),
       exposeLocalServerOnNetwork: Boolean(nextSettings.exposeLocalServerOnNetwork),
       themeMode: nextSettings.themeMode === 'light' || nextSettings.themeMode === 'dark' ? nextSettings.themeMode : 'system',
+      selectedLocalModel: normalizeSelectedLocalModel(nextSettings.selectedLocalModel, this.availableLocalModels),
     };
     await fs.mkdir(path.dirname(this.settingsPath), { recursive: true });
     await fs.writeFile(this.settingsPath, JSON.stringify(this.desktopSettings, null, 2), 'utf8');
@@ -460,7 +588,7 @@ export class LocalServerController {
 
     const wasExposeSetting = key === 'exposeLocalServerOnNetwork';
     const wasLocalRunning = Boolean(this.localServerUrl);
-    const nextValue = key === 'themeMode' ? value : Boolean(value);
+    const nextValue = key === 'themeMode' || key === 'selectedLocalModel' ? value : Boolean(value);
     await this.saveDesktopSettings({ ...this.desktopSettings, [key]: nextValue });
 
     return {
@@ -613,7 +741,7 @@ export class LocalServerController {
     if (!forceOwnServer) {
       const candidateUrls = await getExistingServerCandidateUrls(defaultUrl);
       for (const candidateUrl of candidateUrls) {
-        if (await isCloudCliServer(candidateUrl)) {
+        if (await isReusableCloudCliServer(candidateUrl)) {
           const displayUrl = getDisplayUrl(candidateUrl);
           this.localServerPort = getPortFromUrl(candidateUrl);
           this.appendStartupLog(`Using existing Local Glue at ${displayUrl}`);
@@ -729,7 +857,7 @@ export class LocalServerController {
   }
 
   async ensureLocalModelBackend(serverRoot = null) {
-    const config = resolveLocalModelConfig();
+    const config = resolveLocalModelConfig(process.env, this.homeDir, this.getSelectedLocalModel());
     const envMap = buildLocalModelEnvironment(config.modelId, config.baseUrl);
 
     Object.assign(process.env, envMap);
@@ -737,12 +865,23 @@ export class LocalServerController {
 
     const healthUrl = `${config.baseUrl}/health`;
     if (await isEndpointHealthy(healthUrl)) {
-      this.appendStartupLog(`Using existing local model backend at ${config.baseUrl}`);
-      return config;
+      if (await isLocalModelBackendServing(config.baseUrl, config.modelId)) {
+        this.appendStartupLog(`Using existing local model backend at ${config.baseUrl}`);
+        return config;
+      }
+      if (!this.ownedModelProcess) {
+        throw new Error(
+          `A different local model backend is already running on port ${config.port}. Stop it first or choose the running model.`,
+        );
+      }
+
+      this.appendStartupLog(`Restarting local model backend with ${config.modelId}...`);
+      await this.shutdownOwnedModelServer();
     }
 
     if (this.ownedModelProcess) {
-      const ready = await waitForHealthyEndpoint(healthUrl, LOCAL_MODEL_START_TIMEOUT_MS);
+      const ready = await waitForHealthyEndpoint(healthUrl, LOCAL_MODEL_START_TIMEOUT_MS)
+        && await isLocalModelBackendServing(config.baseUrl, config.modelId);
       if (ready) {
         this.appendStartupLog(`Local model backend ready at ${config.baseUrl}`);
         return config;
@@ -837,7 +976,9 @@ export class LocalServerController {
 export {
   buildLocalModelEnvironment,
   DEFAULT_PORT,
+  getLocalModelOptions,
   HOST,
+  isReusableCloudCliServer,
   renderDotEnvFile,
   resolveLocalModelConfig,
 };

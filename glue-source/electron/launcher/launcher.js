@@ -3,7 +3,16 @@ window.__MOCK_STATE__ = {
   account: { connected: true, email: 'you@cloudcli.ai' },
   activeTarget: { kind: 'launcher', name: 'Launcher', url: null },
   cloudLoading: false,
-  desktopSettings: { keepLocalServerRunning: false, exposeLocalServerOnNetwork: false, themeMode: 'system' },
+  desktopSettings: {
+    keepLocalServerRunning: false,
+    exposeLocalServerOnNetwork: false,
+    themeMode: 'system',
+    selectedLocalModel: 'mlx-community/gemma-4-e4b-it-4bit',
+  },
+  availableLocalModels: [
+    { id: 'mlx-community/gemma-4-e4b-it-4bit', label: 'gemma-4-e4b-it-4bit' },
+    { id: 'mlx-community/gemma-4-12B-it-4bit', label: 'gemma-4-12B-it-4bit' },
+  ],
   localWebUrl: 'http://localhost:3001',
   shareableWebUrl: 'http://localhost:3001',
   localServerRunning: false,
@@ -29,12 +38,18 @@ window.__MOCK_STATE__ = {
   var mockState = clone(MOCK);
   var mockBridge = {
     getState: function () { return Promise.resolve(clone(mockState)); },
-    openLocal: function () {
+    openLocal: function (selectedLocalModel) {
+      if (selectedLocalModel) {
+        mockState.desktopSettings.selectedLocalModel = selectedLocalModel;
+      }
       mockState.localServerRunning = true;
       mockState.activeTarget = { kind: 'local', name: 'Local Glue', url: mockState.localWebUrl };
       return Promise.resolve(clone(mockState));
     },
-    openLocalWebUi: function () {
+    openLocalWebUi: function (selectedLocalModel) {
+      if (selectedLocalModel) {
+        mockState.desktopSettings.selectedLocalModel = selectedLocalModel;
+      }
       mockState.localServerRunning = true;
       return Promise.resolve(clone(mockState));
     },
@@ -147,6 +162,16 @@ window.__MOCK_STATE__ = {
     return (state && (state.shareableWebUrl || state.localWebUrl)) || '';
   }
 
+  function availableLocalModels(state) {
+    return (state && state.availableLocalModels) || [];
+  }
+
+  function selectedLocalModel(state) {
+    var settings = state && state.desktopSettings ? state.desktopSettings : {};
+    var models = availableLocalModels(state);
+    return settings.selectedLocalModel || (models[0] && models[0].id) || 'mlx-community/gemma-4-e4b-it-4bit';
+  }
+
   function envCount(state) {
     var count = state && state.environments ? state.environments.length : 0;
     return count + ' environment' + (count === 1 ? '' : 's');
@@ -170,7 +195,9 @@ window.__MOCK_STATE__ = {
     connected: connected,
     authState: authState,
     accountLabel: accountLabel,
+    availableLocalModels: availableLocalModels,
     localUrl: localUrl,
+    selectedLocalModel: selectedLocalModel,
     envCount: envCount,
     version: VERSION,
     logoUrl: LOGO_URL,
@@ -236,6 +263,14 @@ window.__MOCK_STATE__ = {
       });
   };
 
+  CC.getSelectedLocalModel = function () {
+    var field = document.querySelector('[data-cc-setting="selectedLocalModel"]');
+    if (field && field.value) {
+      return field.value;
+    }
+    return selectedLocalModel(CC.state);
+  };
+
   CC.startPolling = function () {
     if (CC._poll) return;
     var ticks = 0;
@@ -294,13 +329,13 @@ window.__MOCK_STATE__ = {
   CC.act = function (name, node) {
     switch (name) {
       case 'local':
-        return CC.run('Starting Local Glue...', function () { return bridge.openLocal(); });
+        return CC.run('Starting Local Glue...', function () { return bridge.openLocal(CC.getSelectedLocalModel()); });
       case 'connect':
         return CC.run('Opening Glue Hosted to connect your account...', function () { return bridge.connectCloud(); });
       case 'logout':
         return CC.run('Logging out...', function () { return bridge.disconnectCloud(); });
       case 'open-web':
-        return CC.run('Opening local web UI in your browser...', function () { return bridge.openLocalWebUi(); });
+        return CC.run('Opening local web UI in your browser...', function () { return bridge.openLocalWebUi(CC.getSelectedLocalModel()); });
       case 'copy-web':
         return CC.run('Copied local URL to clipboard', function () { return bridge.copyLocalWebUrl(); });
       case 'diagnostics':
@@ -441,9 +476,16 @@ window.__MOCK_STATE__ = {
     options = options || {};
     var settings = state.desktopSettings || {};
     var url = localUrl(state) || 'starts on demand';
+    var models = availableLocalModels(state);
+    var activeModel = selectedLocalModel(state);
+    var modelOptions = models.map(function (option) {
+      return '<option value="' + esc(option.id) + '"' + (option.id === activeModel ? ' selected' : '') + '>' + esc(option.label) + '</option>';
+    }).join('');
     var body = '<div class="cc-surface">' +
+      '<label class="cc-field"><span class="cc-field-label">Local model</span><select class="cc-select" data-cc-setting="selectedLocalModel">' + modelOptions + '</select></label>' +
+      '<div class="cc-note">Choose a downloaded local model before starting Local Glue.</div>' +
       '<div class="cc-meta mono">' + esc(url) + '</div>' +
-      '<div class="cc-row2"><button class="btn sm" data-cc-action="open-web">' + icon('arrow', 14) + 'Open in browser</button><button class="btn sm" data-cc-action="copy-web">' + icon('copy', 14) + 'Copy URL</button></div>';
+      '<div class="cc-row2"><button class="btn sm" data-cc-action="open-web">' + icon('arrow', 14) + 'Open in browser</button><button class="btn sm" data-cc-action="copy-web"' + (state.localServerRunning ? '' : ' disabled') + '>' + icon('copy', 14) + 'Copy URL</button></div>';
     if (options.includePreferences) {
       body +=
         '<label class="cc-toggle"><input type="checkbox" data-cc-setting="keepLocalServerRunning"' + (settings.keepLocalServerRunning ? ' checked' : '') + '><span><b>Keep server running</b><br>Leave Local Glue available after you quit the app.</span></label>' +
@@ -539,7 +581,7 @@ window.__MOCK_STATE__ = {
       if (setting) {
         CC.act('set-setting', {
           key: setting.getAttribute('data-cc-setting'),
-          value: setting.checked,
+          value: setting.type === 'checkbox' ? setting.checked : setting.value,
         });
         return;
       }
@@ -627,9 +669,16 @@ window.__MOCK_STATE__ = {
   }
 
   function localPane(state) {
+    var models = CC.availableLocalModels(state);
+    var activeModel = CC.selectedLocalModel(state);
+    var modelOptions = models.map(function (option) {
+      return '<option value="' + CC.esc(option.id) + '"' + (option.id === activeModel ? ' selected' : '') + '>' + CC.esc(option.label) + '</option>';
+    }).join('');
     return '<div class="pane-h"><div><h2 class="pane-title">Local servers</h2><p class="pane-sub">Manage Local Glue on this machine. No account required.</p></div></div>' +
       '<div class="card"><div class="card-head"><div><div class="card-t">Local server</div><div class="card-sub mono">' + CC.esc(CC.localUrl(state) || 'Starts on demand') + '</div></div><div class="card-tools"><span class="dot" style="background:' + (state.localServerRunning ? 'var(--ok)' : 'var(--tx3)') + '"></span><button class="icon-btn" data-cc-action="local-settings-toggle" title="Local settings">' + CC.icon('gear', 16) + '</button></div></div>' +
-      '<div class="card-actions"><button class="btn pri" data-cc-action="local">' + CC.icon('play', 15) + 'Open Local Glue</button><button class="btn" data-cc-action="open-web">' + CC.icon('arrow', 14) + 'Open in browser</button><button class="btn" data-cc-action="copy-web">' + CC.icon('copy', 14) + 'Copy URL</button></div></div>';
+      '<label class="cc-field"><span class="cc-field-label">Local model</span><select class="cc-select" data-cc-setting="selectedLocalModel">' + modelOptions + '</select></label>' +
+      '<div class="cc-note">Choose a downloaded local model before starting Local Glue.</div>' +
+      '<div class="card-actions"><button class="btn pri" data-cc-action="local">' + CC.icon('play', 15) + 'Open Local Glue</button><button class="btn" data-cc-action="open-web">' + CC.icon('arrow', 14) + 'Open in browser</button><button class="btn" data-cc-action="copy-web"' + (state.localServerRunning ? '' : ' disabled') + '>' + CC.icon('copy', 14) + 'Copy URL</button></div></div>';
   }
 
   function envRow(environment) {

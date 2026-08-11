@@ -7,7 +7,6 @@ import { CloudController } from './cloud.js';
 import { DesktopWindowManager } from './desktopWindow.js';
 import { DesktopNotificationsController } from './desktopNotifications.js';
 import { LocalServerController } from './localServer.js';
-import { isExpectedNavigationAbort } from './navigationErrors.js';
 import { openLocalTarget } from './localOpenFlow.js';
 import { TabsController } from './tabs.js';
 
@@ -89,6 +88,7 @@ function getCloudState() {
 function getLocalState() {
   return {
     desktopSettings: localServer.getSettings(),
+    availableLocalModels: localServer.getAvailableLocalModels(),
     localServerRunning: Boolean(localServer.getLocalServerUrl()),
     localWebUrl: localServer.getLocalServerUrl(),
     shareableWebUrl: localServer.getShareableWebUrl(),
@@ -314,12 +314,11 @@ async function handleDeepLink(url) {
 }
 
 async function copyLocalWebUrl() {
-  await localServer.ensureLocalServer();
   const shareableUrl = localServer.getShareableWebUrl();
   const localUrl = localServer.getLocalServerUrl();
 
   if (!shareableUrl) {
-    throw new Error('Local Glue URL is not available yet.');
+    throw new Error('Start Local Glue first to copy its URL.');
   }
 
   clipboard.writeText(shareableUrl);
@@ -336,7 +335,10 @@ async function copyLocalWebUrl() {
   return getDesktopState();
 }
 
-async function openLocalWebUi() {
+async function openLocalWebUi(selectedLocalModel = null) {
+  if (selectedLocalModel) {
+    await localServer.updateDesktopSetting('selectedLocalModel', selectedLocalModel);
+  }
   await localServer.ensureLocalServer();
   const url = localServer.getShareableWebUrl() || localServer.getLocalServerUrl();
   if (!url) {
@@ -535,7 +537,10 @@ async function runActiveEnvironmentAction(action) {
   }
 }
 
-async function openLocalInDesktop() {
+async function openLocalInDesktop(selectedLocalModel = null) {
+  if (selectedLocalModel) {
+    await localServer.updateDesktopSetting('selectedLocalModel', selectedLocalModel);
+  }
   return openLocalTarget({
     tabs,
     localServer,
@@ -543,14 +548,6 @@ async function openLocalInDesktop() {
     setActiveTarget,
     getDesktopState,
   });
-}
-
-async function autoOpenLocalOnLaunch() {
-  const target = await localServer.getResolvedTarget();
-  if (activeTarget?.kind !== 'launcher') {
-    return;
-  }
-  await desktopWindow.showTarget(target);
 }
 
 async function openEnvironmentInDesktop(environment) {
@@ -731,8 +728,8 @@ function registerIpcHandlers() {
     }
     return openEnvironmentInDesktop(environment);
   });
-  ipcMain.handle('cloudcli-desktop:open-local', async () => openLocalInDesktop());
-  ipcMain.handle('cloudcli-desktop:open-local-web-ui', async () => openLocalWebUi());
+  ipcMain.handle('cloudcli-desktop:open-local', async (_event, selectedLocalModel) => openLocalInDesktop(selectedLocalModel));
+  ipcMain.handle('cloudcli-desktop:open-local-web-ui', async (_event, selectedLocalModel) => openLocalWebUi(selectedLocalModel));
   ipcMain.handle('cloudcli-desktop:refresh-environments', async () => {
     await refreshCloudEnvironments({ showErrors: true });
     return getDesktopState();
@@ -923,10 +920,6 @@ async function bootstrap() {
   registerIpcHandlers();
   registerAppEvents();
   await createDesktopWindow();
-  void autoOpenLocalOnLaunch().catch((error) => {
-    if (isExpectedNavigationAbort(error)) return;
-    void showError('Could not open Local Glue', error);
-  });
   void refreshCloudEnvironments({ showErrors: false });
 }
 
