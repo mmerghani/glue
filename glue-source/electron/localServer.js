@@ -674,6 +674,7 @@ export class LocalServerController {
         ...runtime.env,
         HOST: bindHost,
         SERVER_PORT: String(port),
+        VITE_IS_PLATFORM: 'true',
         PATH: getDesktopPath(),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -900,6 +901,7 @@ export class LocalServerController {
       detached: true,
       env: {
         ...process.env,
+        VITE_IS_PLATFORM: 'true',
         PATH: getDesktopPath(),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
