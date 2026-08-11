@@ -122,6 +122,7 @@ function getDesktopState() {
     },
     activeTarget,
     desktopSettings: localState.desktopSettings,
+    availableLocalModels: localState.availableLocalModels,
     localWebUrl: localState.localWebUrl,
     shareableWebUrl: localState.shareableWebUrl,
     localServerRunning: localState.localServerRunning,
