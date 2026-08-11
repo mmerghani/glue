@@ -10,3 +10,5 @@ grep -Fq -- '--with-desktop-deps' <<<"$output"
 grep -Fq -- 'Prepares glue-source/ for local desktop development' <<<"$output"
 grep -Fq -- 'The default starter model is about 5GB. Larger models take longer.' <<<"$output"
 grep -Fq -- 'This download only happens once per model.' <<<"$output"
+
+grep -Fq -- 'https://github.com/mmerghani/claude-code-local.git' "$REPO_DIR/install.sh"
